@@ -6,6 +6,7 @@
 #include <psp2/kernel/modulemgr.h>
 #include <stdbool.h>
 #include <vitasdk.h>
+#include <stdlib.h>
 
 #define CMD_PORT 1338
 #define ARG_MAX (20)
@@ -17,26 +18,38 @@ extern int net_connected;
 static SceUID loader_thid;
 static int loader_sockfd;
 
-void cmd_handle(char* cmd, unsigned int cmd_size, char* res_msg)
+typedef struct
+{
+    char* ptr;
+    int alloced;
+} string_pointer;
+
+string_pointer cmd_handle(char* cmd, unsigned int cmd_size)
 {
     char* arg_list[ARG_MAX];
+    string_pointer retval;
 
     size_t arg_count = parse_cmd(cmd, cmd_size, arg_list, ARG_MAX);
     const cmd_definition* cmd_def = cmd_get_definition(arg_list[0]);
 
     if (cmd_def == NULL)
     {
-        strcpy(res_msg, "Error: Unknown command.\n");
-        return;
+        retval.ptr = "Error: Unknown command.\n";
+        retval.alloced = 0;
+        return retval;
     }
 
     if (cmd_def->arg_count != arg_count - 1)
     {
-        strcpy(res_msg, "Error: Incorrect number of arguments.\n");
-        return;
+        retval.ptr = "Error: Incorrect number of arguments.\n";
+        retval.alloced = 0;
+        return retval;
     }
 
-    cmd_def->executor(arg_list, arg_count, res_msg);
+    retval.alloced = cmd_def->alloced;
+    retval.ptr = cmd_def->executor(arg_list, arg_count);
+
+    return retval;
 }
 
 int cmd_thread(unsigned int args, void* argp)
@@ -65,13 +78,18 @@ int cmd_thread(unsigned int args, void* argp)
             char cmd[100] = { 0 };
             int size = sceNetRecv(client_sockfd, cmd, sizeof(cmd), 0);
 
-            char res_msg[60] = { 0 };
+            string_pointer res_msg;
 
             if (size >= 0)
-                cmd_handle(cmd, (unsigned int)size, res_msg);
+                res_msg = cmd_handle(cmd, (unsigned int)size);
 
-            sceNetSend(client_sockfd, res_msg, strlen(res_msg), 0);
+            sceNetSend(client_sockfd, res_msg.ptr, strlen(res_msg.ptr), 0);
             sceNetSocketClose(client_sockfd);
+
+            if (res_msg.alloced)
+            {
+                free(res_msg.ptr);
+            }
         }
         else
         {
